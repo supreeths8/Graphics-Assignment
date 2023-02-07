@@ -1,7 +1,6 @@
-import functools
+import os
 from dataclasses import dataclass
 from enum import Enum, auto
-from timeit import default_timer as _timer
 
 # noinspection PyUnresolvedReferences
 import vtkmodules.vtkInteractionStyle
@@ -10,13 +9,14 @@ import vtkmodules.vtkRenderingOpenGL2
 
 from vtkmodules.vtkFiltersCore import vtkPolyDataNormals
 from vtkmodules.vtkIOGeometry import vtkSTLReader
+from vtkmodules.vtkIOImage import vtkJPEGWriter
 
 from vtkmodules.vtkRenderingCore import (
     vtkActor,
     vtkPolyDataMapper,
     vtkRenderWindow,
     vtkRenderWindowInteractor,
-    vtkRenderer, vtkLight
+    vtkRenderer, vtkWindowToImageFilter
 )
 
 
@@ -35,20 +35,9 @@ class ShadeType(Enum):
     phong = auto()
 
 
-def timer(func):
-    """Print the runtime of the decorated function"""
-    @functools.wraps(func)
-    def wrapper_timer(*args, **kwargs):
-        start_time = _timer()    # 1
-        func(*args, **kwargs)
-        end_time = _timer()      # 2
-        run_time = (end_time - start_time)*1000    # 3
-        print(f"Finished {args[2].name} operation in {run_time:.4f} milli seconds")
-        return
-    return wrapper_timer
-
-
 def main():
+    input_stl_file = "./files/Easter_Basket.stl"
+    output_result = "./outputs/Easter_Basket.jpg"
     rw = vtkRenderWindow()
     iren = vtkRenderWindowInteractor()
     iren.SetRenderWindow(rw)
@@ -62,7 +51,7 @@ def main():
     def _make_coordinates():
         return ViewPortCoordinates(x_min=next(xmins), y_min=next(ymins), x_max=next(xmaxs), y_max=next(ymaxs))
 
-    source = get_source()
+    source = load_source(input_stl_file)
     coordinates = _make_coordinates()
     test_rendering(source, coordinates, ShadeType.gouraud, rw)
 
@@ -78,39 +67,60 @@ def main():
     rw.Render()
     rw.SetWindowName('MultipleViewPorts')
     rw.SetSize(800, 800)
+    writer = vtkJPEGWriter()
+    window_to_image_filter = vtkWindowToImageFilter()
+    window_to_image_filter.SetInput(rw)
+    window_to_image_filter.SetInputBufferTypeToRGB()
+    window_to_image_filter.ReadFrontBufferOff()
+    window_to_image_filter.Update()
+    writer.SetFileName(output_result)
+    writer.SetInputConnection(window_to_image_filter.GetOutputPort())
+    writer.Write()
     iren.Start()
 
 
-def get_source():
+def load_source(file: str):
+    """
+    Load the STL file and return the reader object
+    :param file: STL file path
+    :return: VTk STL reader
+    """
     reader = vtkSTLReader()
-    reader.SetFileName("/home/supreeths/work/winter/graphics/assignment_1/files/pug.stl")
+    reader.SetFileName(file)
     reader.Update()
+    os.chdir(os.path.dirname(__file__))
+    print(f"File name: {file.split('/')[-1]}")
+    print(f"Number of vertices = {reader.GetOutput().GetNumberOfPoints()}")
     return reader
 
 
-@timer
 def test_rendering(_source, coordinates: ViewPortCoordinates, shade_type: ShadeType, rw):
+    """
+    Render the STL object in the view port of the render window using the `coordinates` object and the `shading` type
+    :param _source: Object to render
+    :param coordinates: ViewPortCoordinates to specify the viewport in the render window
+    :param shade_type: Shade type to use for the interpolation
+    :param rw: VTK render window object
+    :return:
+    """
     camera = None
     ren = vtkRenderer()
 
-    light = vtkLight()
-    light.SetLightTypeToSceneLight()
-    light.SetAmbientColor(1, 1, 1)
-    light.SetDiffuseColor(1, 1, 1)
-    light.SetSpecularColor(1, 1, 1)
-    light.SetPosition(-100, 100, 25)
-    light.SetFocalPoint(0, 0, 0)
-    light.SetIntensity(0.8)
-
-    rw.AddRenderer(ren)
+    #  Set the view port for the object in the multi-viewport window
     ren.SetViewport(coordinates.x_min, coordinates.y_min, coordinates.x_max, coordinates.y_max)
     ren.SetActiveCamera(camera)
-    mapper = vtkPolyDataMapper()
 
+    # vtkPolyDataMapper is a class that maps polygonal data and that actually does
+    # the mapping to the rendering/graphics hardware/software.
+    # vtkPolyDataNormals is a filter that computes point and/or cell normals for a polygonal mesh.
+    # It can reorder polygons to ensure consistent orientation across polygon neighbors.
+    # Sharp edges can be split and points duplicated with separate normals to give crisp (rendered) surface definition.
+    mapper = vtkPolyDataMapper()
     normals = vtkPolyDataNormals()
     normals.SetInputConnection(_source.GetOutputPort())
-
     mapper.SetInputConnection(normals.GetOutputPort())
+
+    #  actor represents an object in the rendered scene
     actor = vtkActor()
 
     if shade_type is ShadeType.gouraud:
@@ -123,9 +133,9 @@ def test_rendering(_source, coordinates: ViewPortCoordinates, shade_type: ShadeT
         actor.GetProperty().SetRepresentationToWireframe()
     actor.GetProperty().SetEdgeColor(1, 1, 1)
     actor.SetMapper(mapper)
-    # ren.AddLight(light)
     ren.AddActor(actor)
     ren.ResetCamera()
+    rw.AddRenderer(ren)
 
 
 if __name__ == '__main__':
