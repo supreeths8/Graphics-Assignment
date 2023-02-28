@@ -1,142 +1,97 @@
-import os
-from dataclasses import dataclass
-from enum import Enum, auto
+import vtk
+# Step 1: Read the 3D model using vtkSTLReader
+reader = vtk.vtkSTLReader()
+reader.SetFileName('/home/supreeths/work/winter/graphics/Graphics-Assignment/assignment_1/files/teapot.stl')
+reader.Update()
+total_vertices = reader.GetOutput().GetNumberOfPoints()
+model = reader.GetOutput()
 
-# noinspection PyUnresolvedReferences
-import vtkmodules.vtkInteractionStyle
-# noinspection PyUnresolvedReferences
-import vtkmodules.vtkRenderingOpenGL2
+# Step 2: Create a plane at the center of the model
+center = model.GetCenter()
+print(f"Center of model {center}")
+plane = vtk.vtkPlane()
+plane.SetOrigin(center)
+plane.SetNormal(1, 0, 1)
 
-from vtkmodules.vtkFiltersCore import vtkPolyDataNormals
-from vtkmodules.vtkIOGeometry import vtkSTLReader
-from vtkmodules.vtkIOImage import vtkJPEGWriter
+# Step 3: Clip the model using the plane
+clipper = vtk.vtkClipPolyData()
+clipper.SetInputData(model)
+clipper.SetClipFunction(plane)
+clipper.SetValue(0)
+clipper.Update()
+num_vertices_clip = clipper.GetOutput().GetNumberOfPoints()
+print(f"Number of vertices = {reader.GetOutput().GetNumberOfPoints()}")
+print(f"Number of vertices in clipped out part: {num_vertices_clip}")
+print(f"Number of vertices in remaining part: {total_vertices - num_vertices_clip}")
 
-from vtkmodules.vtkRenderingCore import (
-    vtkActor,
-    vtkPolyDataMapper,
-    vtkRenderWindow,
-    vtkRenderWindowInteractor,
-    vtkRenderer, vtkWindowToImageFilter
-)
+# Step 4: Cut the clipped model using the plane
+cutter = vtk.vtkCutter()
+cutter.SetInputData(clipper.GetOutput())
+cutter.SetCutFunction(plane)
+cutter.Update()
 
+# Step 5: Extract the triangles from the cutter output
+triangleFilter = vtk.vtkTriangleFilter()
+triangleFilter.SetInputData(cutter.GetOutput())
+triangleFilter.Update()
 
-@dataclass
-class ViewPortCoordinates:
-    x_min: float
-    x_max: float
-    y_min: float
-    y_max: float
+# Step 6: Create a stripper to merge the triangles into polylines
+stripper = vtk.vtkStripper()
+stripper.SetInputData(triangleFilter.GetOutput())
+stripper.Update()
 
+# Display the original model in wireframe representation
+mapper_orig = vtk.vtkPolyDataMapper()
+mapper_orig.SetInputData(model)
+actor_orig = vtk.vtkActor()
+actor_orig.SetMapper(mapper_orig)
+actor_orig.GetProperty().SetRepresentationToWireframe()
 
-class ShadeType(Enum):
-    wireframe = auto()
-    flat = auto()
-    gouraud = auto()
-    phong = auto()
+# Display the clipped part of the model in surface representation
+mapper_clipped = vtk.vtkPolyDataMapper()
+mapper_clipped.SetInputData(clipper.GetOutput())
+actor_clipped = vtk.vtkActor()
+actor_clipped.SetMapper(mapper_clipped)
 
+# Display the intersection area in red color
+mapper_intersection = vtk.vtkPolyDataMapper()
+mapper_intersection.SetInputData(stripper.GetOutput())
+actor_intersection = vtk.vtkActor()
+actor_intersection.SetMapper(mapper_intersection)
+actor_intersection.GetProperty().SetColor(1, 0, 0)
 
-def main():
-    input_stl_file = "./files/Easter_Basket.stl"
-    output_result = "./outputs/Easter_Basket.jpg"
-    rw = vtkRenderWindow()
-    iren = vtkRenderWindowInteractor()
-    iren.SetRenderWindow(rw)
+sample = vtk.vtkSampleFunction()
+sample.SetImplicitFunction(plane)
+sample.SetModelBounds(model.GetBounds())
 
-    # Define viewport ranges.
-    xmins = iter([0, .5, 0, .5])
-    xmaxs = iter([0.5, 1, 0.5, 1])
-    ymins = iter([0, 0, .5, .5])
-    ymaxs = iter([0.5, 0.5, 1, 1])
+# Create a contour filter from the sample function
+contour = vtk.vtkContourFilter()
+contour.SetInputConnection(sample.GetOutputPort())
+contour.SetValue(0, 0)
 
-    def _make_coordinates():
-        return ViewPortCoordinates(x_min=next(xmins), y_min=next(ymins), x_max=next(xmaxs), y_max=next(ymaxs))
+# Create a mapper and actor for the plane and set their properties
+mapper_plane = vtk.vtkPolyDataMapper()
+mapper_plane.SetInputConnection(contour.GetOutputPort())
+actor_plane = vtk.vtkActor()
+actor_plane.SetMapper(mapper_plane)
+actor_plane.GetProperty().SetColor(0, 1, 0)
+actor_plane.GetProperty().SetOpacity(0.5)
 
-    source = load_source(input_stl_file)
-    coordinates = _make_coordinates()
-    test_rendering(source, coordinates, ShadeType.gouraud, rw)
+# Set up the render window and add actors to the renderer
+renderer = vtk.vtkRenderer()
+renderer.AddActor(actor_orig)
+renderer.AddActor(actor_clipped)
+renderer.AddActor(actor_intersection)
+renderer.AddActor(actor_plane)
 
-    coordinates = _make_coordinates()
-    test_rendering(source, coordinates, ShadeType.phong, rw)
+# Set up the render window and interactor
+render_window = vtk.vtkRenderWindow()
+render_window.AddRenderer(renderer)
+render_window.SetSize(800, 800)
+interactor = vtk.vtkRenderWindowInteractor()
+interactor.SetRenderWindow(render_window)
 
-    coordinates = _make_coordinates()
-    test_rendering(source, coordinates, ShadeType.wireframe, rw)
-
-    coordinates = _make_coordinates()
-    test_rendering(source, coordinates, ShadeType.flat, rw)
-
-    rw.Render()
-    rw.SetWindowName('MultipleViewPorts')
-    rw.SetSize(800, 800)
-    writer = vtkJPEGWriter()
-    window_to_image_filter = vtkWindowToImageFilter()
-    window_to_image_filter.SetInput(rw)
-    window_to_image_filter.SetInputBufferTypeToRGB()
-    window_to_image_filter.ReadFrontBufferOff()
-    window_to_image_filter.Update()
-    writer.SetFileName(output_result)
-    writer.SetInputConnection(window_to_image_filter.GetOutputPort())
-    writer.Write()
-    iren.Start()
-
-
-def load_source(file: str):
-    """
-    Load the STL file and return the reader object
-    :param file: STL file path
-    :return: VTk STL reader
-    """
-    reader = vtkSTLReader()
-    reader.SetFileName(file)
-    reader.Update()
-    os.chdir(os.path.dirname(__file__))
-    print(f"File name: {file.split('/')[-1]}")
-    print(f"Number of vertices = {reader.GetOutput().GetNumberOfPoints()}")
-    return reader
-
-
-def test_rendering(_source, coordinates: ViewPortCoordinates, shade_type: ShadeType, rw):
-    """
-    Render the STL object in the view port of the render window using the `coordinates` object and the `shading` type
-    :param _source: Object to render
-    :param coordinates: ViewPortCoordinates to specify the viewport in the render window
-    :param shade_type: Shade type to use for the interpolation
-    :param rw: VTK render window object
-    :return:
-    """
-    camera = None
-    ren = vtkRenderer()
-
-    #  Set the view port for the object in the multi-viewport window
-    ren.SetViewport(coordinates.x_min, coordinates.y_min, coordinates.x_max, coordinates.y_max)
-    ren.SetActiveCamera(camera)
-
-    # vtkPolyDataMapper is a class that maps polygonal data and that actually does
-    # the mapping to the rendering/graphics hardware/software.
-    # vtkPolyDataNormals is a filter that computes point and/or cell normals for a polygonal mesh.
-    # It can reorder polygons to ensure consistent orientation across polygon neighbors.
-    # Sharp edges can be split and points duplicated with separate normals to give crisp (rendered) surface definition.
-    mapper = vtkPolyDataMapper()
-    normals = vtkPolyDataNormals()
-    normals.SetInputConnection(_source.GetOutputPort())
-    mapper.SetInputConnection(normals.GetOutputPort())
-
-    #  actor represents an object in the rendered scene
-    actor = vtkActor()
-
-    if shade_type is ShadeType.gouraud:
-        actor.GetProperty().SetInterpolationToGouraud()
-    elif shade_type is ShadeType.phong:
-        actor.GetProperty().SetInterpolationToPhong()
-    elif shade_type is ShadeType.flat:
-        actor.GetProperty().SetInterpolationToFlat()
-    elif shade_type is ShadeType.wireframe:
-        actor.GetProperty().SetRepresentationToWireframe()
-    actor.GetProperty().SetEdgeColor(1, 1, 1)
-    actor.SetMapper(mapper)
-    ren.AddActor(actor)
-    ren.ResetCamera()
-    rw.AddRenderer(ren)
-
-
-if __name__ == '__main__':
-    main()
+# Start the interaction and rendering loop
+interactor.Initialize()
+render_window.Render()
+interactor.Start()
