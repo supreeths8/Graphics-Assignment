@@ -3,6 +3,6 @@
 #### Python 3.8.16
 
 ### To run the code
-#### <li> Place the input STL file in the `files` dir and the output jpg image in the `outputs` dir
-#### <li> Set `input_stl_file` and `output_result` variables to the STL file path and output jpg file path respectively
+#### <li> Place the input STL file in the `files` dir
+#### <li> Set `input_stl_file` variable to the STL file path
 #### <li> Run main.py
